@@ -131,4 +131,43 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
     assertEq(pointsBalanceAfterSwap - pointsBalanceOriginal, 2 * 10 ** 14);
 }
 
+    function test_referralBonus() public {
+    uint256 poolIdUint = uint256(PoolId.unwrap(key.toId()));
+    
+    address user = address(0x1234);
+    address referrer = address(0x5678);
+    
+    // Give user some ETH for swap
+    vm.deal(user, 1 ether);
+    
+    // Encode hookData with referrer
+    bytes memory hookData = abi.encode(user, referrer);
+    
+    // User swaps 0.001 ETH
+    vm.prank(user);
+    swapRouter.swap{value: 0.001 ether}(
+        key,
+        SwapParams({
+            zeroForOne: true,
+            amountSpecified: -0.001 ether,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        }),
+        PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        }),
+        hookData
+    );
+    
+    // Base points = 20% of 0.001 ETH = 2 * 10**14
+    uint256 basePoints = 2 * 10 ** 14;
+    uint256 bonus = (basePoints * 10) / 100; // 10% bonus
+    
+    // User should have base + bonus
+    assertEq(hook.balanceOf(user, poolIdUint), basePoints + bonus);
+    
+    // Referrer should have bonus
+    assertEq(hook.balanceOf(referrer, poolIdUint), bonus);
+}
+
 }
