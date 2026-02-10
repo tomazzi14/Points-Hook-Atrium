@@ -206,4 +206,67 @@ function testFuzz_PointsAre20Percent(uint256 ethAmount) public {
     assertEq(pointsReceived, ethAmount / 5);
 }
 
+// TEST: First referrer wins, second referrer is ignored
+function test_onlyFirstReferrerCounts() public {
+    uint256 poolIdUint = uint256(PoolId.unwrap(key.toId()));
+    
+    address user = address(0xABCD);
+    address referrer1 = address(0x1111);
+    address referrer2 = address(0x2222);
+    
+    vm.deal(user, 2 ether);
+    
+    // First swap with referrer1
+    bytes memory hookData1 = abi.encode(user, referrer1);
+    
+    vm.prank(user);
+    swapRouter.swap{value: 0.001 ether}(
+        key,
+        SwapParams({
+            zeroForOne: true,
+            amountSpecified: -0.001 ether,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        }),
+        PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        }),
+        hookData1
+    );
+    
+    // Check referrer1 got bonus
+    uint256 basePoints = 2 * 10 ** 14;
+    uint256 bonus = (basePoints * 10) / 100;
+    assertEq(hook.balanceOf(referrer1, poolIdUint), bonus);
+    
+    // Second swap with different referrer2
+    bytes memory hookData2 = abi.encode(user, referrer2);
+    
+    vm.prank(user);
+    swapRouter.swap{value: 0.001 ether}(
+        key,
+        SwapParams({
+            zeroForOne: true,
+            amountSpecified: -0.001 ether,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        }),
+        PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        }),
+        hookData2
+    );
+    
+    // referrer1 should have bonus from BOTH swaps (still the referrer)
+    assertEq(hook.balanceOf(referrer1, poolIdUint), bonus * 2);
+    
+    // referrer2 should have NOTHING (ignored)
+    assertEq(hook.balanceOf(referrer2, poolIdUint), 0);
+    
+    // Check referredBy mapping
+    assertEq(hook.referredBy(user), referrer1);
+    assertEq(hook.referralCount(referrer1), 1);
+    assertEq(hook.referralCount(referrer2), 0);
+}
+
 }

@@ -57,46 +57,40 @@ contract PointsHook is BaseHook, ERC1155 {
         return "https://api.example.com/token/{id}";
     }
     
-    function _assignPoints(
-        PoolId poolId,
-        bytes calldata hookData,
-        uint256 points
-    ) internal {
-        // If no data passed, don't mint anything
-        if (hookData.length == 0) return;
-        
-        // Decode user address and referrer address from hookData
-        (address user, address referrer) = abi.decode(hookData, (address, address));
-        
-        // If user is zero address, don't mint
-        if (user == address(0)) return;
-        
-        // Convert poolId to uint256 for ERC1155 token ID
-        uint256 poolIdUint = uint256(PoolId.unwrap(poolId));
-        uint256 userPoints = points;
-        
-        // REFERRAL LOGIC
-        // Check if referrer is valid (not zero, not same as user)
-        if (referrer != address(0) && referrer != user) {
-            // If user has no referrer yet, set this one
-            if (referredBy[user] == address(0)) {
-                referredBy[user] = referrer;
-                referralCount[referrer]++;  // Increase referrer's count
-            }
-            
-            // Calculate bonus: 10% of base points
-            uint256 bonus = (points * REFERRAL_BONUS) / 100;
-            
-            // User gets base points + bonus
-            userPoints = points + bonus;
-            
-            // Referrer also gets the bonus
-            _mint(referrer, poolIdUint, bonus, "");
+ function _assignPoints(
+    PoolId poolId,
+    bytes calldata hookData,
+    uint256 points
+) internal {
+    if (hookData.length == 0) return;
+    
+    (address user, address referrer) = abi.decode(hookData, (address, address));
+    
+    if (user == address(0)) return;
+    
+    uint256 poolIdUint = uint256(PoolId.unwrap(poolId));
+    uint256 userPoints = points;
+    
+    // REFERRAL LOGIC
+    if (referrer != address(0) && referrer != user) {
+        // If user has no referrer yet, set this one
+        if (referredBy[user] == address(0)) {
+            referredBy[user] = referrer;
+            referralCount[referrer]++;
         }
-        
-        // Mint points to the user
-        _mint(user, poolIdUint, userPoints, "");
     }
+    
+    // Always give bonus to the SAVED referrer (ignore new ones)
+    if (referredBy[user] != address(0)) {
+        address savedReferrer = referredBy[user];
+        uint256 bonus = (points * REFERRAL_BONUS) / 100;
+        
+        userPoints = points + bonus;
+        _mint(savedReferrer, poolIdUint, bonus, "");
+    }
+    
+    _mint(user, poolIdUint, userPoints, "");
+}
     
     /// notice Hook function that runs AFTER every swap
     /// param key Pool information (tokens, fee, hooks address)
