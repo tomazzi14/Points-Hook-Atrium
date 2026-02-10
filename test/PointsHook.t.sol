@@ -71,7 +71,7 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
     uint160 sqrtPriceAtTickLower = TickMath.getSqrtPriceAtTick(-60);
     uint160 sqrtPriceAtTickUpper = TickMath.getSqrtPriceAtTick(60);
     
-    uint256 ethToAdd = 0.003 ether;
+    uint256 ethToAdd = 10 ether;
     uint128 liquidityDelta = LiquidityAmounts.getLiquidityForAmount0(
         SQRT_PRICE_1_1,
         sqrtPriceAtTickUpper,
@@ -168,6 +168,42 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
     
     // Referrer should have bonus
     assertEq(hook.balanceOf(referrer, poolIdUint), bonus);
+}
+
+// FUZZ TEST: Random ETH amounts always give 20% points
+function testFuzz_PointsAre20Percent(uint256 ethAmount) public {
+    
+    // Bound ethAmount between 0.001 ETH and 1 ETH (no 0.0001)
+    ethAmount = bound(ethAmount, 0.001 ether, 1 ether);
+    
+    uint256 poolIdUint = uint256(PoolId.unwrap(key.toId()));
+    bytes memory hookData = abi.encode(address(this), address(0));
+    
+    // Give ourselves enough ETH
+    vm.deal(address(this), ethAmount);
+    
+    uint256 pointsBefore = hook.balanceOf(address(this), poolIdUint);
+    
+    // Swap random amount of ETH
+    swapRouter.swap{value: ethAmount}(
+        key,
+        SwapParams({
+            zeroForOne: true,
+            amountSpecified: -int256(ethAmount),
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        }),
+        PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        }),
+        hookData
+    );
+    
+    uint256 pointsAfter = hook.balanceOf(address(this), poolIdUint);
+    uint256 pointsReceived = pointsAfter - pointsBefore;
+    
+    // Should always be 20% (divide by 5)
+    assertEq(pointsReceived, ethAmount / 5);
 }
 
 }
