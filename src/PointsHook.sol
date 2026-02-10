@@ -8,15 +8,26 @@ import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {SwapParams} from "v4-core/types/PoolOperation.sol";
 
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
-import {SwapParams} from "v4-core/types/PoolOperation.sol";
 
 contract PointsHook is BaseHook, ERC1155 {
     using CurrencyLibrary for Currency;
+    
+    // REFERRAL SYSTEM
+    // Track who referred each user (one referrer per user)
+    mapping(address => address) public referredBy;
+    // Track how many people each address has referred
+    mapping(address => uint256) public referralCount;
+    
+    // CONSTANTS
+    // Referral bonus percentage (10 = 10%)
+    uint256 public constant REFERRAL_BONUS = 10;
+    
     constructor(IPoolManager _manager) BaseHook(_manager) {}
-
+    
     function getHookPermissions()
         public
         pure
@@ -32,7 +43,7 @@ contract PointsHook is BaseHook, ERC1155 {
                 afterAddLiquidity: false,
                 afterRemoveLiquidity: false,
                 beforeSwap: false,
-                afterSwap: true,
+                afterSwap: true,           // We only use afterSwap
                 beforeDonate: false,
                 afterDonate: false,
                 beforeSwapReturnDelta: false,
@@ -41,53 +52,87 @@ contract PointsHook is BaseHook, ERC1155 {
                 afterRemoveLiquidityReturnDelta: false
             });
     }
-
+    
     function uri(uint256) public pure override returns (string memory) {
         return "https://api.example.com/token/{id}";
     }
-
-    // Helper function to mint points to users
-function _assignPoints(
-    PoolId poolId,
-    bytes calldata hookData,
-    uint256 points
-) internal {
-    // If no hookData is passed in, no points assigned
-    if (hookData.length == 0) return;
     
-    // Extract user address from hookData
-    address user = abi.decode(hookData, (address));
+    function _assignPoints(
+        PoolId poolId,
+        bytes calldata hookData,
+        uint256 points
+    ) internal {
+        // If no data passed, don't mint anything
+        if (hookData.length == 0) return;
+        
+        // Decode user address and referrer address from hookData
+        (address user, address referrer) = abi.decode(hookData, (address, address));
+        
+        // If user is zero address, don't mint
+        if (user == address(0)) return;
+        
+        // Convert poolId to uint256 for ERC1155 token ID
+        uint256 poolIdUint = uint256(PoolId.unwrap(poolId));
+        uint256 userPoints = points;
+        
+        // REFERRAL LOGIC
+        // Check if referrer is valid (not zero, not same as user)
+        if (referrer != address(0) && referrer != user) {
+            // If user has no referrer yet, set this one
+            if (referredBy[user] == address(0)) {
+                referredBy[user] = referrer;
+                referralCount[referrer]++;  // Increase referrer's count
+            }
+            
+            // Calculate bonus: 10% of base points
+            uint256 bonus = (points * REFERRAL_BONUS) / 100;
+            
+            // User gets base points + bonus
+            userPoints = points + bonus;
+            
+            // Referrer also gets the bonus
+            _mint(referrer, poolIdUint, bonus, "");
+        }
+        
+        // Mint points to the user
+        _mint(user, poolIdUint, userPoints, "");
+    }
     
-    // If user address is zero, nobody gets points
-    if (user == address(0)) return;
-    
-    // Mint points to the user (ERC1155)
-    uint256 poolIdUint = uint256(PoolId.unwrap(poolId));
-    _mint(user, poolIdUint, points, "");
-}    
-    
-function _afterSwap(
-    address,                              // sender (who made the swap)
-    PoolKey calldata key,                 // pool info
-    SwapParams calldata swapParams,       // swap parameters
-    BalanceDelta delta,                   // IMPORTANT: how much was exchanged
-    bytes calldata hookData               // custom data (hookData)
-) internal override returns (bytes4, int128) {
-    // Only work with ETH-TOKEN pools (currency0 must be ETH)
-    if (!key.currency0.isAddressZero()) return (this.afterSwap.selector, 0);
-    
-    // Only mint points when buying TOKEN with ETH (zeroForOne = true)
-    if (!swapParams.zeroForOne) return (this.afterSwap.selector, 0);
-    
-    // Calculate ETH spent (always negative for user in delta.amount0)
-    uint256 ethSpendAmount = uint256(int256(-delta.amount0()));
-    
-    // Mint points = 20% of ETH spent
-    uint256 pointsForSwap = ethSpendAmount / 5;
-    
-    // Assign points to user
-    _assignPoints(key.toId(), hookData, pointsForSwap);
-    
-    return (this.afterSwap.selector, 0);
-}
+    /// notice Hook function that runs AFTER every swap
+    /// param key Pool information (tokens, fee, hooks address)
+    /// param swapParams Swap direction and amount
+    /// param delta How much of each token was exchanged
+    /// param hookData Custom data passed by user
+    /// return selector Function selector (must return this for success)
+    /// return 0 No delta changes
+    function _afterSwap(
+        address,                              // sender (who made the swap)
+        PoolKey calldata key,                 // pool info
+        SwapParams calldata swapParams,       // swap parameters
+        BalanceDelta delta,                   // how much was exchanged
+        bytes calldata hookData               // custom data (user + referrer)
+    ) internal override returns (bytes4, int128) {
+        // RULE 1: Only work with ETH-TOKEN pools
+        // currency0 must be native ETH (address zero)
+        if (!key.currency0.isAddressZero()) return (this.afterSwap.selector, 0);
+        
+        // RULE 2: Only give points when buying TOKEN with ETH
+        // zeroForOne = true means swapping currency0 (ETH) for currency1 (TOKEN)
+        if (!swapParams.zeroForOne) return (this.afterSwap.selector, 0);
+        
+        // Calculate how much ETH user spent
+        // delta.amount0() is negative (ETH going out from user)
+        // We convert to positive uint256
+        uint256 ethSpendAmount = uint256(int256(-delta.amount0()));
+        
+        // Calculate points: 20% of ETH spent
+        // Dividing by 5 gives us 20% (1/5 = 0.2 = 20%)
+        uint256 pointsForSwap = ethSpendAmount / 5;
+        
+        // Mint points to user (with referral logic)
+        _assignPoints(key.toId(), hookData, pointsForSwap);
+        
+        // Return success
+        return (this.afterSwap.selector, 0);
+    }
 }
