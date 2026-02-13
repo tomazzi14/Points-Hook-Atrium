@@ -1,80 +1,94 @@
 "use client"
 
-import { useState, useMemo, useCallback } from "react"
-import { ArrowDownUp, Loader2, Settings, Coins, Gift, ChevronDown } from "lucide-react"
+import { useState, useMemo, useEffect } from "react"
+import { ArrowDownUp, Loader2, Settings, Coins, Gift } from "lucide-react"
 import { toast } from "sonner"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { useEthBalance } from "@/hooks/useEthBalance"
+import { useSwap } from "@/hooks/useSwap"
+import { useWallet } from "@/lib/wallet-context"
 import { calculatePoints, calculateReferralBonus, formatNumber } from "@/lib/mock-data"
-
-const TOKENS = [
-  { symbol: "ETH", name: "Ethereum", balance: 2.45 },
-  { symbol: "TEST", name: "Test Token", balance: 10000 },
-]
-
-type SwapState = "idle" | "approving" | "swapping" | "success"
+import { formatEther } from "viem"
 
 export function SwapCard() {
-  const [fromToken, setFromToken] = useState(TOKENS[0])
-  const [toToken, setToToken] = useState(TOKENS[1])
+  const { isConnected } = useWallet()
+  const { data: ethBalanceData } = useEthBalance()
+  const { swap, isPending, isConfirming, isSuccess, error } = useSwap()
+
   const [fromAmount, setFromAmount] = useState("")
-  const [swapState, setSwapState] = useState<SwapState>("idle")
+  const [direction, setDirection] = useState<"ethToToken" | "tokenToEth">("ethToToken")
+
+  const ethBalance = ethBalanceData
+    ? parseFloat(formatEther(ethBalanceData.value))
+    : 0
 
   const parsedAmount = parseFloat(fromAmount) || 0
-  const hasReferrer = true // Simulated: user was referred
+  const hasReferrer = false // TODO: read from URL params or contract
 
+  // Simulated exchange rate (until pool is live)
   const toAmount = useMemo(() => {
     if (!parsedAmount) return ""
-    // Simulated exchange rate
-    return (parsedAmount * 1000).toFixed(2)
-  }, [parsedAmount])
+    return direction === "ethToToken"
+      ? (parsedAmount * 1000).toFixed(2)
+      : (parsedAmount / 1000).toFixed(6)
+  }, [parsedAmount, direction])
 
   const basePoints = useMemo(() => calculatePoints(parsedAmount), [parsedAmount])
   const referralBonus = useMemo(() => calculateReferralBonus(basePoints), [basePoints])
   const totalPoints = basePoints + (hasReferrer ? referralBonus : 0)
 
-  const handleSwitch = useCallback(() => {
-    setFromToken(toToken)
-    setToToken(fromToken)
+  const fromSymbol = direction === "ethToToken" ? "ETH" : "TEST"
+  const toSymbol = direction === "ethToToken" ? "TEST" : "ETH"
+  const fromBalance = direction === "ethToToken" ? ethBalance : 0 // TODO: read TEST balance
+
+  const handleSwitch = () => {
+    setDirection((d) => (d === "ethToToken" ? "tokenToEth" : "ethToToken"))
     setFromAmount("")
-  }, [fromToken, toToken])
+  }
 
-  const handleSwap = useCallback(async () => {
-    if (!parsedAmount) return
-    setSwapState("approving")
-    await new Promise((r) => setTimeout(r, 1500))
-    setSwapState("swapping")
-    await new Promise((r) => setTimeout(r, 2000))
-    setSwapState("success")
-    toast.success(`You earned ${formatNumber(totalPoints)} points!`, {
-      description: "Your swap was successful.",
-    })
-    setTimeout(() => {
-      setSwapState("idle")
+  const handleSwap = () => {
+    if (!parsedAmount || !isConnected) return
+
+    if (direction === "ethToToken") {
+      swap(fromAmount)
+    } else {
+      // TODO: implement TOKEN → ETH swap (needs token approval first)
+      toast.error("TOKEN → ETH swap not implemented yet")
+    }
+  }
+
+  // Show toast on success/error
+  useEffect(() => {
+    if (isSuccess) {
+      toast.success(`Swap successful! You earned ~${formatNumber(totalPoints)} points!`)
       setFromAmount("")
-    }, 1500)
-  }, [parsedAmount, totalPoints])
+    }
+  }, [isSuccess, totalPoints])
 
-  const insufficientBalance = parsedAmount > fromToken.balance
+  useEffect(() => {
+    if (error) {
+      const msg = error.message?.includes("Pool not initialized")
+        ? "Pool not initialized yet on Sepolia. Deploy the pool first."
+        : error.message?.slice(0, 100) || "Swap failed"
+      toast.error(msg)
+    }
+  }, [error])
+
+  const insufficientBalance = parsedAmount > fromBalance
+  const isSwapping = isPending || isConfirming
 
   const buttonLabel = (() => {
-    if (swapState === "approving") return "Approving..."
-    if (swapState === "swapping") return "Swapping..."
-    if (swapState === "success") return "Success!"
-    if (insufficientBalance) return `Insufficient ${fromToken.symbol}`
+    if (!isConnected) return "Connect wallet"
+    if (isPending) return "Confirm in wallet..."
+    if (isConfirming) return "Swapping..."
+    if (insufficientBalance) return `Insufficient ${fromSymbol}`
     if (!parsedAmount) return "Enter amount"
     return "Swap & Earn Points"
   })()
 
-  const isDisabled =
-    swapState !== "idle" || !parsedAmount || insufficientBalance
+  const isDisabled = isSwapping || !parsedAmount || insufficientBalance || !isConnected
 
   return (
     <Card className="border-border/50 bg-card">
@@ -99,23 +113,32 @@ export function SwapCard() {
               value={fromAmount}
               onChange={(e) => setFromAmount(e.target.value)}
               min="0"
-              step="0.01"
+              step="0.001"
               className="min-w-0 flex-1 bg-transparent text-2xl font-bold text-foreground outline-none placeholder:text-muted-foreground/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             />
-            <TokenSelector token={fromToken} onSelect={(t) => { setFromToken(t); setFromAmount("") }} otherToken={toToken} />
+            <div className="flex shrink-0 items-center gap-1.5 rounded-lg bg-card px-3 py-2 text-sm font-semibold text-foreground">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
+                {fromSymbol[0]}
+              </span>
+              {fromSymbol}
+            </div>
           </div>
           <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-            <span>
-              {parsedAmount
-                ? `~$${formatNumber(Math.floor(parsedAmount * 3200))}`
-                : "\u00A0"}
-            </span>
+            <span>{"\u00A0"}</span>
             <button
               type="button"
-              onClick={() => setFromAmount(fromToken.balance.toString())}
+              onClick={() => {
+                if (fromBalance > 0) {
+                  // Leave a little for gas
+                  const maxAmount = direction === "ethToToken"
+                    ? Math.max(0, fromBalance - 0.001).toFixed(6)
+                    : fromBalance.toString()
+                  setFromAmount(maxAmount)
+                }
+              }}
               className="text-primary hover:text-primary/80 transition-colors"
             >
-              Max: {fromToken.balance} {fromToken.symbol}
+              Max: {fromBalance.toFixed(4)} {fromSymbol}
             </button>
           </div>
         </div>
@@ -142,12 +165,17 @@ export function SwapCard() {
               readOnly
               className="min-w-0 flex-1 bg-transparent text-2xl font-bold text-foreground outline-none placeholder:text-muted-foreground/40"
             />
-            <TokenSelector token={toToken} onSelect={(t) => setToToken(t)} otherToken={fromToken} />
+            <div className="flex shrink-0 items-center gap-1.5 rounded-lg bg-card px-3 py-2 text-sm font-semibold text-foreground">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
+                {toSymbol[0]}
+              </span>
+              {toSymbol}
+            </div>
           </div>
         </div>
 
         {/* Points Preview */}
-        {parsedAmount > 0 && (
+        {parsedAmount > 0 && direction === "ethToToken" && (
           <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
             <div className="flex flex-col gap-2 text-sm">
               <div className="flex items-center justify-between">
@@ -187,7 +215,7 @@ export function SwapCard() {
           disabled={isDisabled}
           className="h-12 w-full bg-primary text-base font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50 glow-primary"
         >
-          {(swapState === "approving" || swapState === "swapping") && (
+          {isSwapping && (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
           )}
           {buttonLabel}
@@ -197,51 +225,9 @@ export function SwapCard() {
         <div className="flex items-center justify-center gap-3 text-xs text-muted-foreground">
           <span>Slippage: 0.5%</span>
           <span className="text-border">{"/"}</span>
-          <span>Gas: ~$2.50</span>
+          <span>Sepolia Testnet</span>
         </div>
       </CardContent>
     </Card>
-  )
-}
-
-function TokenSelector({
-  token,
-  onSelect,
-  otherToken,
-}: {
-  token: (typeof TOKENS)[0]
-  onSelect: (t: (typeof TOKENS)[0]) => void
-  otherToken: (typeof TOKENS)[0]
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="flex shrink-0 items-center gap-1.5 rounded-lg bg-card px-3 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-secondary"
-        >
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
-            {token.symbol[0]}
-          </span>
-          {token.symbol}
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="bg-card border-border">
-        {TOKENS.filter((t) => t.symbol !== otherToken.symbol).map((t) => (
-          <DropdownMenuItem
-            key={t.symbol}
-            onClick={() => onSelect(t)}
-            className="cursor-pointer gap-2"
-          >
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
-              {t.symbol[0]}
-            </span>
-            <span>{t.symbol}</span>
-            <span className="ml-auto text-xs text-muted-foreground">{t.name}</span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   )
 }

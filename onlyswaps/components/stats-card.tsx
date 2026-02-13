@@ -1,73 +1,25 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Coins, Users, Trophy, TrendingUp } from "lucide-react"
+import { Coins, Users, Wallet } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { MOCK_USER_STATS, formatNumber } from "@/lib/mock-data"
-
-function AnimatedNumber({ target, duration = 1200 }: { target: number; duration?: number }) {
-  const [current, setCurrent] = useState(0)
-
-  useEffect(() => {
-    const startTime = Date.now()
-    const timer = setInterval(() => {
-      const elapsed = Date.now() - startTime
-      const progress = Math.min(elapsed / duration, 1)
-      // Ease out cubic
-      const eased = 1 - Math.pow(1 - progress, 3)
-      setCurrent(Math.floor(target * eased))
-      if (progress >= 1) clearInterval(timer)
-    }, 16)
-    return () => clearInterval(timer)
-  }, [target, duration])
-
-  return <>{formatNumber(current)}</>
-}
-
-const STATS = [
-  {
-    label: "Points Balance",
-    value: MOCK_USER_STATS.pointsBalance,
-    icon: Coins,
-    color: "text-primary",
-    bgColor: "bg-primary/10",
-  },
-  {
-    label: "Referrals",
-    value: MOCK_USER_STATS.referralCount,
-    icon: Users,
-    suffix: " friends",
-    color: "text-emerald-400",
-    bgColor: "bg-emerald-400/10",
-  },
-  {
-    label: "Global Rank",
-    value: MOCK_USER_STATS.globalRank,
-    icon: Trophy,
-    prefix: "#",
-    suffix: ` of ${formatNumber(MOCK_USER_STATS.totalUsers)}`,
-    color: "text-amber-400",
-    bgColor: "bg-amber-400/10",
-  },
-  {
-    label: "Total Earned",
-    value: MOCK_USER_STATS.totalEarnedEth,
-    icon: TrendingUp,
-    suffix: " ETH in points",
-    isDecimal: true,
-    color: "text-sky-400",
-    bgColor: "bg-sky-400/10",
-  },
-]
+import { usePointsBalance } from "@/hooks/usePointsBalance"
+import { useReferralCount } from "@/hooks/useReferralCount"
+import { useEthBalance } from "@/hooks/useEthBalance"
+import { formatEther } from "viem"
+import { formatNumber } from "@/lib/mock-data"
 
 export function StatsCard() {
-  const [isLoading, setIsLoading] = useState(true)
+  const { data: pointsRaw, isLoading: pointsLoading } = usePointsBalance()
+  const { data: referralsRaw, isLoading: referralsLoading } = useReferralCount()
+  const { data: ethBalanceData, isLoading: ethLoading } = useEthBalance()
 
-  useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 800)
-    return () => clearTimeout(timer)
-  }, [])
+  // Points come back as wei (18 decimals) from the ERC1155 — convert to human-readable
+  const pointsBalance = pointsRaw ? parseFloat(formatEther(BigInt(pointsRaw.toString()))) : 0
+  const referralCount = referralsRaw ? Number(referralsRaw) : 0
+  const ethBalance = ethBalanceData ? formatEther(ethBalanceData.value) : "0"
+
+  const isLoading = pointsLoading || referralsLoading || ethLoading
 
   return (
     <Card className="border-border/50 bg-card">
@@ -77,27 +29,58 @@ export function StatsCard() {
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
-        {STATS.map((stat) => (
-          <div key={stat.label} className="flex items-center gap-3">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${stat.bgColor}`}>
-              <stat.icon className={`h-5 w-5 ${stat.color}`} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-muted-foreground">{stat.label}</p>
-              {isLoading ? (
-                <Skeleton className="mt-1 h-6 w-24" />
-              ) : (
-                <p className={`text-xl font-bold ${stat.color}`}>
-                  {stat.prefix}
-                  {stat.isDecimal ? stat.value : <AnimatedNumber target={stat.value} />}
-                  <span className="text-sm font-normal text-muted-foreground">
-                    {stat.suffix}
-                  </span>
-                </p>
-              )}
-            </div>
+        {/* Points Balance */}
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+            <Coins className="h-5 w-5 text-primary" />
           </div>
-        ))}
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-muted-foreground">Points Balance</p>
+            {isLoading ? (
+              <Skeleton className="mt-1 h-6 w-24" />
+            ) : (
+              <p className="text-xl font-bold text-primary">
+                {formatNumber(pointsBalance)}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Referrals */}
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/10">
+            <Users className="h-5 w-5 text-emerald-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-muted-foreground">Referrals</p>
+            {isLoading ? (
+              <Skeleton className="mt-1 h-6 w-24" />
+            ) : (
+              <p className="text-xl font-bold text-emerald-400">
+                {referralCount}
+                <span className="text-sm font-normal text-muted-foreground"> friends</span>
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Wallet Balance */}
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-400/10">
+            <Wallet className="h-5 w-5 text-sky-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-muted-foreground">Wallet Balance</p>
+            {isLoading ? (
+              <Skeleton className="mt-1 h-6 w-24" />
+            ) : (
+              <p className="text-xl font-bold text-sky-400">
+                {parseFloat(ethBalance).toFixed(4)}
+                <span className="text-sm font-normal text-muted-foreground"> ETH</span>
+              </p>
+            )}
+          </div>
+        </div>
       </CardContent>
     </Card>
   )

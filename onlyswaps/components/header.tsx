@@ -2,9 +2,19 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Lock, ExternalLink } from "lucide-react"
+import { Lock, ExternalLink, Copy, LogOut, ChevronDown } from "lucide-react"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { ConnectButton } from "@rainbow-me/rainbowkit"
+import { useDisconnect } from "wagmi"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 const NAV_LINKS = [
   { href: "/", label: "Home" },
@@ -12,8 +22,21 @@ const NAV_LINKS = [
   { href: "https://docs.uniswap.org/contracts/v4/overview", label: "Docs", external: true },
 ]
 
+function WalletAvatar({ address }: { address: string }) {
+  const hue = parseInt(address.slice(2, 8), 16) % 360
+  return (
+    <div
+      className="h-6 w-6 rounded-full"
+      style={{
+        background: `linear-gradient(135deg, hsl(${hue}, 70%, 50%), hsl(${(hue + 60) % 360}, 70%, 40%))`,
+      }}
+    />
+  )
+}
+
 export function Header() {
   const pathname = usePathname()
+  const { disconnect } = useDisconnect()
 
   return (
     <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
@@ -60,8 +83,115 @@ export function Header() {
           })}
         </nav>
 
-        {/* Wallet Button - RainbowKit */}
-        <ConnectButton />
+        {/* Wallet Button - Custom styled */}
+        <ConnectButton.Custom>
+          {({
+            account,
+            chain,
+            openChainModal,
+            openConnectModal,
+            mounted,
+          }) => {
+            const connected = mounted && account && chain
+
+            return (
+              <div
+                {...(!mounted && {
+                  "aria-hidden": true,
+                  style: { opacity: 0, pointerEvents: "none" as const, userSelect: "none" as const },
+                })}
+              >
+                {(() => {
+                  if (!connected) {
+                    return (
+                      <Button
+                        onClick={openConnectModal}
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 glow-primary"
+                      >
+                        Connect Wallet
+                      </Button>
+                    )
+                  }
+
+                  if (chain.unsupported) {
+                    return (
+                      <Button onClick={openChainModal} variant="destructive">
+                        Wrong Network
+                      </Button>
+                    )
+                  }
+
+                  return (
+                    <div className="flex items-center gap-2">
+                      {/* Chain button */}
+                      <button
+                        onClick={openChainModal}
+                        className="hidden items-center gap-1.5 rounded-lg border border-border/60 bg-card px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary sm:flex"
+                      >
+                        {chain.hasIcon && chain.iconUrl && (
+                          <img
+                            alt={chain.name ?? "Chain"}
+                            src={chain.iconUrl}
+                            className="h-4 w-4 rounded-full"
+                          />
+                        )}
+                        <span className="hidden md:inline">{chain.name}</span>
+                      </button>
+
+                      {/* Account dropdown */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center gap-2 rounded-lg border border-border/60 bg-card px-3 py-2 transition-colors hover:bg-secondary">
+                            {account.displayBalance && (
+                              <span className="hidden text-sm text-muted-foreground sm:inline">
+                                {account.displayBalance}
+                              </span>
+                            )}
+                            <WalletAvatar address={account.address} />
+                            <span className="font-mono text-sm text-foreground">
+                              {account.displayName}
+                            </span>
+                            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48 bg-card border-border">
+                          <DropdownMenuItem
+                            onClick={() => {
+                              navigator.clipboard.writeText(account.address)
+                              toast.success("Address copied to clipboard")
+                            }}
+                            className="cursor-pointer gap-2"
+                          >
+                            <Copy className="h-4 w-4" />
+                            Copy Address
+                          </DropdownMenuItem>
+                          <DropdownMenuItem asChild className="cursor-pointer gap-2">
+                            <a
+                              href={`https://sepolia.etherscan.io/address/${account.address}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                              View on Etherscan
+                            </a>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => disconnect()}
+                            className="cursor-pointer gap-2 text-destructive focus:text-destructive"
+                          >
+                            <LogOut className="h-4 w-4" />
+                            Disconnect
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )
+                })()}
+              </div>
+            )
+          }}
+        </ConnectButton.Custom>
       </div>
     </header>
   )
